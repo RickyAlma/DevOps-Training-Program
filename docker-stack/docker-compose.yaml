@@ -1,0 +1,126 @@
+# ============================================================
+# docker-compose.yml — Development Environment
+# ============================================================
+version: "3.9"
+
+# ── Networks ─────────────────────────────────────────────────
+networks:
+  app-network:
+    driver: bridge
+
+# ── Volumes ──────────────────────────────────────────────────
+volumes:
+  postgres_dev_data:
+    driver: local
+  redis_dev_data:
+    driver: local
+
+# ── Services ─────────────────────────────────────────────────
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  db:
+    build:
+      context: ./db
+      target: development        # matches Stage 2 in db/Dockerfile
+    container_name: appdb_dev
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: appdb_dev     # matches ENV in db/Dockerfile
+      POSTGRES_USER: devuser
+      POSTGRES_PASSWORD: devpassword
+    volumes:
+      - postgres_dev_data:/var/lib/postgresql/data
+      - ./db/init:/docker-entrypoint-initdb.d
+    ports:
+      - "5432:5432"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U devuser -d appdb_dev"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: redis_dev
+    restart: unless-stopped
+    volumes:
+      - redis_dev_data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── Flask API ───────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      target: development        # matches Stage 2 in api/Dockerfile
+    container_name: flask_api_dev
+    restart: unless-stopped
+    environment:
+      FLASK_ENV: development
+      FLASK_DEBUG: "1"
+      DATABASE_URL: postgresql://devuser:devpassword@db:5432/appdb_dev
+      REDIS_URL: redis://redis:6379/0
+      SECRET_KEY: dev-secret-key-change-in-prod
+    volumes:
+      - ./api:/app               # live code reload
+    ports:
+      - "5000:5000"
+    networks:
+      - app-network
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── React Frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: development        # matches Stage 2 in frontend/Dockerfile
+    container_name: react_frontend_dev
+    restart: unless-stopped
+    environment:
+      REACT_APP_API_URL: http://localhost:5000
+      CHOKIDAR_USEPOLLING: "true"  # enables hot reload inside Docker
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules          # preserve container node_modules
+    ports:
+      - "3000:3000"
+    networks:
+      - app-network
+    depends_on:
+      - api
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
