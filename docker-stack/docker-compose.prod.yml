@@ -1,0 +1,98 @@
+# ============================================================
+# docker-compose.prod.yml — Production Overrides
+# Applied on top of docker-compose.yml
+# Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build -d
+# ============================================================
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_prod_data:
+    driver: local
+  redis_prod_data:
+    driver: local
+  prometheus_prod_data:
+    driver: local
+  grafana_prod_data:
+    driver: local
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  db:
+    build:
+      context: ./db
+      target: production           # matches Stage 4 in db/Dockerfile
+    container_name: appdb_prod
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_prod_data:/var/lib/postgresql/data
+    ports: []                      # no external DB access in production
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    container_name: redis_prod
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD}
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_prod_data:/data
+    ports: []                      # no external Redis access in production
+
+  # ── Flask API ───────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      target: production           # matches Stage 4 in api/Dockerfile
+    container_name: flask_api_prod
+    environment:
+      FLASK_ENV: production
+      FLASK_DEBUG: "0"
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+    volumes: []                    # no bind mounts in production
+    ports: []                      # traffic goes through frontend Nginx only
+
+  # ── React Frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: production           # matches Stage 5 in frontend/Dockerfile
+      args:
+        REACT_APP_API_URL: ${API_URL}
+    container_name: react_frontend_prod
+    environment: {}
+    volumes: []                    # no bind mounts in production
+    ports:
+      - "80:80"
+      - "443:443"
+
+  # ── Prometheus ──────────────────────────────────────────────
+  prometheus:
+    container_name: prometheus_prod
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_prod_data:/prometheus
+
+  # ── Grafana ─────────────────────────────────────────────────
+  grafana:
+    container_name: grafana_prod
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_SERVER_DOMAIN: ${GRAFANA_DOMAIN:-localhost}
+    volumes:
+      - grafana_prod_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    ports:
+      - "3001:3000"

@@ -1,0 +1,83 @@
+# ============================================================
+# docker-compose.staging.yml — Staging Overrides
+# Applied on top of docker-compose.yml
+# Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.staging.yml up --build
+# ============================================================
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  postgres_staging_data:
+    driver: local
+  redis_staging_data:
+    driver: local
+
+services:
+
+  # ── PostgreSQL ─────────────────────────────────────────────
+  db:
+    build:
+      context: ./db
+      target: staging              # matches Stage 3 in db/Dockerfile
+    container_name: appdb_staging
+    environment:
+      POSTGRES_DB: appdb_staging
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - postgres_staging_data:/var/lib/postgresql/data
+    ports: []                      # no external DB access in staging
+
+  # ── Redis ───────────────────────────────────────────────────
+  redis:
+    container_name: redis_staging
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    volumes:
+      - redis_staging_data:/data
+    ports: []                      # no external Redis access in staging
+
+  # ── Flask API ───────────────────────────────────────────────
+  api:
+    build:
+      context: ./api
+      target: staging              # matches Stage 3 in api/Dockerfile
+    container_name: flask_api_staging
+    environment:
+      FLASK_ENV: staging
+      FLASK_DEBUG: "0"
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/appdb_staging
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      SECRET_KEY: ${SECRET_KEY}
+    volumes: []                    # no bind mounts in staging
+    ports:
+      - "5000:5000"
+
+  # ── React Frontend ──────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: staging              # matches Stage 4 in frontend/Dockerfile
+      args:
+        REACT_APP_API_URL: ${API_URL}
+    container_name: react_frontend_staging
+    environment: {}                # no env vars needed for Nginx
+    volumes: []                    # no bind mounts in staging
+    ports:
+      - "80:80"
+
+  # ── Prometheus ──────────────────────────────────────────────
+  prometheus:
+    container_name: prometheus_staging
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+
+  # ── Grafana ─────────────────────────────────────────────────
+  grafana:
+    container_name: grafana_staging
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
